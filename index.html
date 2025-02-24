@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>jumper批量查数据</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .result {
+            margin-top: 20px;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 15px;
+            text-align: center;
+            border: 1px solid #ddd;
+        }
+        th {
+            background-color: #f4f4f4;
+            font-weight: bold;
+        }
+        .address {
+            font-size: 12px;
+            color: #888;
+            overflow-wrap: break-word;
+        }
+        .loading {
+            text-align: center;
+            font-weight: bold;
+            color: #333;
+            display: none;
+        }
+        .spinner {
+            display: inline-block;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .update-message {
+            color: green;
+            font-weight: bold;
+            text-align: center;
+            display: none;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>jumper批量查数据</h1>
+        <label for="wallets">请输入钱包地址（每行一个地址）:</label>
+        <textarea id="wallets" rows="5" placeholder="输入地址，多个地址换行"></textarea><br/>
+        
+        <label for="active-days-threshold">自定义最后活跃时间阈值（天数，默认为 7 天，超过变红色）:</label>
+        <input type="number" id="active-days-threshold" placeholder="输入天数" value="7" />
+
+        <button onclick="batchQuery()">查询</button>
+        <button onclick="updateSelectedAddresses()">更新选定地址</button>
+        <button onclick="openJumper()">批量查jumper积分入口</button>
+
+        <div id="loading" class="loading">
+            <div class="spinner"></div> 正在更新，请稍候...
+        </div>
+        <div id="update-message" class="update-message">更新成功！</div>
+
+        <div class="result">
+            <table>
+                <thead>
+                    <tr>
+                        <th>选择</th>
+                        <th>钱包编号</th>
+                        <th>钱包地址</th>
+                        <th>最后交易时间</th>
+                        <th>交易类型</th>
+                    </tr>
+                </thead>
+                <tbody id="results"></tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            <p>作者推特: <a href="https://x.com/0xXIAOc" target="_blank">https://x.com/0xXIAOc</a></p>
+        </div>
+    </div>
+
+    <script>
+        // 获取用户输入的最后活跃天数
+        function getActiveDaysThreshold() {
+            const thresholdInput = document.getElementById('active-days-threshold');
+            const threshold = parseInt(thresholdInput.value, 10);
+            return isNaN(threshold) ? 7 : threshold; // 默认7天
+        }
+
+        // 格式化时间戳为 "今天", "1天前", "2天前" 等格式
+        function formatRelativeTime(timestamp) {
+            const now = Date.now();
+            const diffInSeconds = Math.floor((now - timestamp * 1000) / 1000); // 秒级差值
+
+            const diffInMinutes = Math.floor(diffInSeconds / 60);
+            const diffInHours = Math.floor(diffInMinutes / 60);
+            const diffInDays = Math.floor(diffInHours / 24);
+
+            return `${diffInDays} 天前`;  // 统一转换为 "X天前"
+        }
+
+        async function batchQuery() {
+            const addresses = document.getElementById("wallets").value.split("\n").map(addr => addr.trim()).filter(addr => addr);
+            if (addresses.length === 0) {
+                alert('请输入至少一个钱包地址');
+                return;
+            }
+
+            const resultsElement = document.getElementById('results');
+            const loadingElement = document.getElementById('loading');
+            resultsElement.innerHTML = ''; // 清空之前的结果
+            loadingElement.style.display = 'block'; // 显示加载提示
+
+            let walletNumber = 1; // 钱包编号，从1开始
+            const ACTIVE_DAYS_THRESHOLD = getActiveDaysThreshold(); // 获取用户设置的活跃天数阈值
+
+            // 使用 Promise.all 并行处理所有地址
+            try {
+                const promises = addresses.map(async (address) => {
+                    const result = await getUserData(address, walletNumber++, ACTIVE_DAYS_THRESHOLD);
+                    return result;
+                });
+
+                // 等待所有请求完成并获取结果
+                const results = await Promise.all(promises);
+
+                // 更新表格
+                results.forEach(result => {
+                    const resultRow = document.createElement('tr');
+                    
+                    // 只在最后交易时间列超出阈值时变红色
+                    const lastTransactionCell = document.createElement('td');
+                    lastTransactionCell.style.color = result.daysSinceLastTransaction > ACTIVE_DAYS_THRESHOLD ? 'red' : 'black';
+                    lastTransactionCell.innerText = result.lastTransactionTime;
+
+                    resultRow.innerHTML = ` 
+                        <td><input type="checkbox" class="select-address" data-address="${result.address}"></td>
+                        <td>${result.walletNumber}</td>
+                        <td class="address">${result.address}</td>
+                    `;
+                    resultRow.appendChild(lastTransactionCell);
+                    resultRow.innerHTML += `
+                        <td>${result.transactionType}</td>
+                    `;
+                    resultsElement.appendChild(resultRow);
+                });
+
+            } catch (error) {
+                console.error('Error during batch query:', error);
+            } finally {
+                loadingElement.style.display = 'none'; // 隐藏加载提示
+            }
+        }
+
+        // 获取单个地址的最后交易时间
+        async function getUserData(address, walletNumber, ACTIVE_DAYS_THRESHOLD) {
+            try {
+                const url = `https://li.quest/v1/analytics/transfers?fromTimestamp=1424747708&status=ALL&integrator=jumper.exchange&wallet=${address}`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                const lastTransaction = data.transfers && data.transfers.length > 0 ? data.transfers[0] : null;
+
+                let lastTransactionTime = "没有交易记录";
+                let transactionType = "未知";
+                let daysSinceLastTransaction = 0;
+
+                if (lastTransaction) {
+                    const sendingTimestamp = lastTransaction.sending ? lastTransaction.sending.timestamp : null;
+                    const receivingTimestamp = lastTransaction.receiving ? lastTransaction.receiving.timestamp : null;
+
+                    // 确保时间戳存在且有效
+                    const timestamp = sendingTimestamp || receivingTimestamp;
+
+                    if (timestamp && !isNaN(timestamp)) {
+                        lastTransactionTime = formatRelativeTime(timestamp); // 转换为相对时间
+
+                        // 计算距离今天的天数
+                        const now = Date.now();
+                        const diffInSeconds = Math.floor((now - timestamp * 1000) / 1000); // 秒级差值
+                        daysSinceLastTransaction = Math.floor(diffInSeconds / (3600 * 24)); // 计算天数
+                    } else {
+                        lastTransactionTime = "时间戳无效";
+                    }
+
+                    // 获取交易类型（例如 ETH 转账等）
+                    const fromChain = lastTransaction.sending ? lastTransaction.sending.chainId : '未知';
+                    const toChain = lastTransaction.receiving ? lastTransaction.receiving.chainId : '未知';
+                    const fromTokenSymbol = lastTransaction.sending ? lastTransaction.sending.token.symbol : '未知';
+                    const toTokenSymbol = lastTransaction.receiving ? lastTransaction.receiving.token.symbol : '未知';
+                    const valueInToken = lastTransaction.sending ? lastTransaction.sending.value / Math.pow(10, lastTransaction.sending.token.decimals) : 0;
+                    const amountInUSD = lastTransaction.sending ? lastTransaction.sending.amountUSD : '未知';
+
+                    transactionType = `兑换的 ${fromTokenSymbol}-${toTokenSymbol} (交易量: ${valueInToken} ${fromTokenSymbol}, 价值: ${amountInUSD} USD)`;
+                }
+
+                return { address, walletNumber, lastTransactionTime, transactionType, daysSinceLastTransaction };
+            } catch (error) {
+                console.error('Error fetching user data:', error);
+                return { address, walletNumber, lastTransactionTime: "无法获取", transactionType: "未知", daysSinceLastTransaction: 0 };
+            }
+        }
+
+        // 打开jumper批量查询网址
+        function openJumper() {
+            window.open("http://47.120.45.114/abc/", "_blank");
+        }
+
+        // 更新选定地址的功能
+        async function updateSelectedAddresses() {
+            const selectedAddresses = [];
+            const checkboxes = document.querySelectorAll('.select-address:checked');
+            checkboxes.forEach(checkbox => {
+                selectedAddresses.push(checkbox.getAttribute('data-address'));
+            });
+
+            if (selectedAddresses.length === 0) {
+                alert('请先选择要更新的地址');
+                return;
+            }
+
+            // 显示加载提示
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('update-message').style.display = 'none';
+
+            // 通过原接口更新选定地址的数据
+            try {
+                const updatePromises = selectedAddresses.map(async (address) => {
+                    const result = await getUserData(address, 1);  // 更新数据
+                    // 在这里进行更新，替换对应行的数据
+                    const row = document.querySelector(`tr[data-address="${address}"]`);
+                    if (row) {
+                        row.cells[2].innerText = result.lastTransactionTime;
+                        row.cells[3].innerText = result.transactionType;
+                    }
+                });
+
+                await Promise.all(updatePromises);
+
+                document.getElementById('update-message').style.display = 'block';
+            } catch (error) {
+                console.error('更新请求失败', error);
+                alert('更新请求失败');
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
