@@ -112,6 +112,8 @@
         <button onclick="batchQuery()">查询</button>
         <button onclick="updateSelectedAddresses()">更新选定地址</button>
         <button onclick="openJumper()">批量查jumper积分入口</button>
+        <!-- 新增按钮：批量查待处理交易入口 -->
+        <button onclick="openPendingTransactions()">批量查待处理交易入口</button>
 
         <div id="loading" class="loading">
             <div class="spinner"></div> 正在更新，请稍候...
@@ -265,44 +267,9 @@
             window.open("http://47.120.45.114/abc/", "_blank");
         }
 
-        // 更新选定地址的功能
-        async function updateSelectedAddresses() {
-            const selectedAddresses = [];
-            const checkboxes = document.querySelectorAll('.select-address:checked');
-            checkboxes.forEach(checkbox => {
-                selectedAddresses.push(checkbox.getAttribute('data-address'));
-            });
-
-            if (selectedAddresses.length === 0) {
-                alert('请先选择要更新的地址');
-                return;
-            }
-
-            // 显示加载提示
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('update-message').style.display = 'none';
-
-            // 通过原接口更新选定地址的数据
-            try {
-                const updatePromises = selectedAddresses.map(async (address) => {
-                    const result = await getUserData(address, 1);  // 更新数据
-                    // 在这里进行更新，替换对应行的数据
-                    const row = document.querySelector(`tr[data-address="${address}"]`);
-                    if (row) {
-                        row.cells[2].innerText = result.lastTransactionTime;
-                        row.cells[3].innerText = result.transactionType;
-                    }
-                });
-
-                await Promise.all(updatePromises);
-
-                document.getElementById('update-message').style.display = 'block';
-            } catch (error) {
-                console.error('更新请求失败', error);
-                alert('更新请求失败');
-            } finally {
-                document.getElementById('loading').style.display = 'none';
-            }
+        // 打开批量查待处理交易网址
+        function openPendingTransactions() {
+            window.open("https://pending-tawny.vercel.app/", "_blank");
         }
     </script>
 </body>
