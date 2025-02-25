@@ -98,11 +98,26 @@
             margin-top: 20px;
             font-size: 14px;
         }
+
+        #delay-info {
+            font-weight: bold;
+            color: red;
+            text-align: center;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>jumper批量查数据</h1>
+
+        <!-- 要活跃的账号和剩余延迟时间 -->
+        <p>要活跃的账号有 <span id="active-account-number">0</span> 个</p>
+        <p id="delay-info" style="display: none;">剩余延迟时间：<span id="remaining-delay-time">0</span>秒</p>
+
+        <!-- 提示信息 -->
+        <p>单次查询最大支持100个地址，超过此数量会延迟2分钟进行剩余地址查询。</p>
+
         <label for="wallets">请输入钱包地址（每行一个地址）:</label>
         <textarea id="wallets" rows="5" placeholder="输入地址，多个地址换行"></textarea><br/>
         
@@ -112,7 +127,6 @@
         <button onclick="batchQuery()">查询</button>
         <button onclick="updateSelectedAddresses()">更新选定地址</button>
         <button onclick="openJumper()">批量查jumper积分入口</button>
-        <!-- 新增按钮：批量查待处理交易入口 -->
         <button onclick="openPendingTransactions()">批量查待处理交易入口</button>
 
         <div id="loading" class="loading">
@@ -129,6 +143,7 @@
                         <th>钱包地址</th>
                         <th>最后交易时间</th>
                         <th>交易类型</th>
+                        <th>交易价值</th>
                     </tr>
                 </thead>
                 <tbody id="results"></tbody>
@@ -174,46 +189,75 @@
 
             let walletNumber = 1; // 钱包编号，从1开始
             const ACTIVE_DAYS_THRESHOLD = getActiveDaysThreshold(); // 获取用户设置的活跃天数阈值
+            let activeAccountCount = 0; // 统计要活跃的账号数量
 
-            // 使用 Promise.all 并行处理所有地址
+            // 限制每次最多查询100个地址
+            const maxBatchSize = 100;
+            const batches = [];
+            while (addresses.length > 0) {
+                batches.push(addresses.splice(0, maxBatchSize)); // 将地址分成多个批次
+            }
+
             try {
-                const promises = addresses.map(async (address) => {
-                    const result = await getUserData(address, walletNumber++, ACTIVE_DAYS_THRESHOLD);
-                    return result;
-                });
+                for (let i = 0; i < batches.length; i++) {
+                    if (i > 0) {
+                        // 显示剩余延迟时间
+                        let remainingTime = 120; // 2分钟延迟
+                        document.getElementById('delay-info').style.display = 'block';
+                        let delayInterval = setInterval(() => {
+                            document.getElementById('remaining-delay-time').innerText = remainingTime;
+                            remainingTime--;
+                            if (remainingTime < 0) {
+                                clearInterval(delayInterval);
+                                document.getElementById('delay-info').style.display = 'none';
+                            }
+                        }, 1000);
+                        await new Promise(resolve => setTimeout(resolve, 120000)); // 延迟 120秒
+                    }
 
-                // 等待所有请求完成并获取结果
-                const results = await Promise.all(promises);
+                    // 处理当前批次
+                    const promises = batches[i].map(async (address) => {
+                        const result = await getUserData(address, walletNumber++, ACTIVE_DAYS_THRESHOLD);
+                        return result;
+                    });
 
-                // 更新表格
-                results.forEach(result => {
-                    const resultRow = document.createElement('tr');
-                    
-                    // 只在最后交易时间列超出阈值时变红色
-                    const lastTransactionCell = document.createElement('td');
-                    lastTransactionCell.style.color = result.daysSinceLastTransaction > ACTIVE_DAYS_THRESHOLD ? 'red' : 'black';
-                    lastTransactionCell.innerText = result.lastTransactionTime;
+                    const results = await Promise.all(promises);
 
-                    resultRow.innerHTML = ` 
-                        <td><input type="checkbox" class="select-address" data-address="${result.address}"></td>
-                        <td>${result.walletNumber}</td>
-                        <td class="address">${result.address}</td>
-                    `;
-                    resultRow.appendChild(lastTransactionCell);
-                    resultRow.innerHTML += `
-                        <td>${result.transactionType}</td>
-                    `;
-                    resultsElement.appendChild(resultRow);
-                });
+                    // 更新表格
+                    results.forEach(result => {
+                        const resultRow = document.createElement('tr');
+                        
+                        const lastTransactionCell = document.createElement('td');
+                        lastTransactionCell.style.color = result.daysSinceLastTransaction > ACTIVE_DAYS_THRESHOLD ? 'red' : 'black';
+                        lastTransactionCell.innerText = result.lastTransactionTime;
+
+                        if (result.daysSinceLastTransaction > ACTIVE_DAYS_THRESHOLD) {
+                            activeAccountCount++;
+                        }
+
+                        resultRow.innerHTML = `
+                            <td><input type="checkbox" class="select-address" data-address="${result.address}"></td>
+                            <td>${result.walletNumber}</td>
+                            <td class="address">${result.address}</td>
+                        `;
+                        resultRow.appendChild(lastTransactionCell);
+                        resultRow.innerHTML += `
+                            <td>${result.transactionType}</td>
+                            <td>${result.transactionValue}</td>
+                        `;
+                        resultsElement.appendChild(resultRow);
+                    });
+                }
 
             } catch (error) {
                 console.error('Error during batch query:', error);
             } finally {
                 loadingElement.style.display = 'none'; // 隐藏加载提示
+                document.getElementById('active-account-number').innerText = activeAccountCount; // 更新活跃账号数量
             }
         }
 
-        // 获取单个地址的最后交易时间
+        // 获取单个地址的最后交易时间和交易价值
         async function getUserData(address, walletNumber, ACTIVE_DAYS_THRESHOLD) {
             try {
                 const url = `https://li.quest/v1/analytics/transfers?fromTimestamp=1424747708&status=ALL&integrator=jumper.exchange&wallet=${address}`;
@@ -224,41 +268,37 @@
 
                 let lastTransactionTime = "没有交易记录";
                 let transactionType = "未知";
+                let transactionValue = "未知";
                 let daysSinceLastTransaction = 0;
 
                 if (lastTransaction) {
                     const sendingTimestamp = lastTransaction.sending ? lastTransaction.sending.timestamp : null;
                     const receivingTimestamp = lastTransaction.receiving ? lastTransaction.receiving.timestamp : null;
 
-                    // 确保时间戳存在且有效
                     const timestamp = sendingTimestamp || receivingTimestamp;
 
                     if (timestamp && !isNaN(timestamp)) {
-                        lastTransactionTime = formatRelativeTime(timestamp); // 转换为相对时间
+                        lastTransactionTime = formatRelativeTime(timestamp);
 
-                        // 计算距离今天的天数
                         const now = Date.now();
-                        const diffInSeconds = Math.floor((now - timestamp * 1000) / 1000); // 秒级差值
-                        daysSinceLastTransaction = Math.floor(diffInSeconds / (3600 * 24)); // 计算天数
+                        const diffInSeconds = Math.floor((now - timestamp * 1000) / 1000);
+                        daysSinceLastTransaction = Math.floor(diffInSeconds / (3600 * 24));
                     } else {
                         lastTransactionTime = "时间戳无效";
                     }
 
-                    // 获取交易类型（例如 ETH 转账等）
-                    const fromChain = lastTransaction.sending ? lastTransaction.sending.chainId : '未知';
-                    const toChain = lastTransaction.receiving ? lastTransaction.receiving.chainId : '未知';
                     const fromTokenSymbol = lastTransaction.sending ? lastTransaction.sending.token.symbol : '未知';
                     const toTokenSymbol = lastTransaction.receiving ? lastTransaction.receiving.token.symbol : '未知';
                     const valueInToken = lastTransaction.sending ? lastTransaction.sending.value / Math.pow(10, lastTransaction.sending.token.decimals) : 0;
                     const amountInUSD = lastTransaction.sending ? lastTransaction.sending.amountUSD : '未知';
-
-                    transactionType = `兑换的 ${fromTokenSymbol}-${toTokenSymbol} (交易量: ${valueInToken} ${fromTokenSymbol}, 价值: ${amountInUSD} USD)`;
+                    transactionType = `兑换的 ${fromTokenSymbol}-${toTokenSymbol}`;
+                    transactionValue = `价值: ${amountInUSD} USD`;
                 }
 
-                return { address, walletNumber, lastTransactionTime, transactionType, daysSinceLastTransaction };
+                return { address, walletNumber, lastTransactionTime, transactionType, transactionValue, daysSinceLastTransaction };
             } catch (error) {
                 console.error('Error fetching user data:', error);
-                return { address, walletNumber, lastTransactionTime: "无法获取", transactionType: "未知", daysSinceLastTransaction: 0 };
+                return { address, walletNumber, lastTransactionTime: "无法获取", transactionType: "未知", transactionValue: "未知", daysSinceLastTransaction: 0 };
             }
         }
 
